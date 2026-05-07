@@ -1,6 +1,5 @@
 """Run once: python add_words.py — inserts new vocab without duplicating existing cards."""
-import sqlite3, os, sys
-sys.stdout.reconfigure(encoding="utf-8")
+import sqlite3, os
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "kanji.db")
 

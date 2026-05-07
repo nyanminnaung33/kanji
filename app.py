@@ -52,6 +52,7 @@ def init_db():
     conn.commit()
 
     if conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0] == 0:
+        from add_words import NEW_WORDS
         seed_data = [
             ("職", "しょく", "job, work, occupation, duty / role", None, None, None),
             ("職業", "しょくぎょう", "occupation / profession", "職業を選ぶ", "しょくぎょうをえらぶ", "to choose an occupation"),
@@ -65,6 +66,10 @@ def init_db():
         conn.executemany(
             "INSERT INTO cards (kanji, reading, meaning, example_word, example_reading, example_meaning) VALUES (?,?,?,?,?,?)",
             seed_data,
+        )
+        conn.executemany(
+            "INSERT INTO cards (kanji, reading, meaning, example_word, example_reading, example_meaning) VALUES (?,?,?,?,?,?)",
+            NEW_WORDS,
         )
         conn.commit()
     conn.close()
