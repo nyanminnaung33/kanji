@@ -16,6 +16,7 @@ def get_db():
 
 
 def init_jlpt_table():
+    from jlpt_seed import JLPT_WORDS
     conn = get_db()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS jlpt_cards (
@@ -26,6 +27,12 @@ def init_jlpt_table():
         )
     """)
     conn.commit()
+    if conn.execute("SELECT COUNT(*) FROM jlpt_cards").fetchone()[0] == 0:
+        conn.executemany(
+            "INSERT INTO jlpt_cards (word, reading, meaning) VALUES (?,?,?)",
+            JLPT_WORDS,
+        )
+        conn.commit()
     conn.close()
 
 
