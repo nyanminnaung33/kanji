@@ -872,9 +872,8 @@ JLPT_WORDS = [
     ("別に", "べつに", "not particularly"),
     ("特急", "とっきゅう", "express train"),
     # Existence / Necessity
-    ("あります", "あります", "to have / to exist"),
+    
     ("有効", "ゆうこう", "effective / valid"),
-    ("ありません", "ありません", "there is not"),
     ("無料", "むりょう", "free of charge"),
     ("無理", "むり", "impossible"),
     ("必ず", "かならず", "without fail"),

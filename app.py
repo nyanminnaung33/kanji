@@ -27,10 +27,12 @@ def init_jlpt_table():
         )
     """)
     conn.commit()
-    if conn.execute("SELECT COUNT(*) FROM jlpt_cards").fetchone()[0] == 0:
+    existing = {(r[0], r[1]) for r in conn.execute("SELECT word, reading FROM jlpt_cards")}
+    to_insert = [(w, r, m) for w, r, m in JLPT_WORDS if (w, r) not in existing]
+    if to_insert:
         conn.executemany(
             "INSERT INTO jlpt_cards (word, reading, meaning) VALUES (?,?,?)",
-            JLPT_WORDS,
+            to_insert,
         )
         conn.commit()
     conn.close()
@@ -51,25 +53,24 @@ def init_db():
     """)
     conn.commit()
 
-    if conn.execute("SELECT COUNT(*) FROM cards").fetchone()[0] == 0:
-        from add_words import NEW_WORDS
-        seed_data = [
-            ("職", "しょく", "job, work, occupation, duty / role", None, None, None),
-            ("職業", "しょくぎょう", "occupation / profession", "職業を選ぶ", "しょくぎょうをえらぶ", "to choose an occupation"),
-            ("無職", "むしょく", "unemployed", "無職の状態", "むしょくのじょうたい", "state of being unemployed"),
-            ("職場", "しょくば", "workplace", "職場の仲間", "しょくばのなかま", "workplace colleagues"),
-            ("退職", "たいしょく", "resignation (leaving a job)", "退職を決める", "たいしょくをきめる", "to decide to resign"),
-            ("就職", "しゅうしょく", "getting a job", "就職活動", "しゅうしょくかつどう", "job hunting"),
-            ("職務", "しょくむ", "job duties", "職務を果たす", "しょくむをはたす", "to fulfill one's duties"),
-            ("公職", "こうしょく", "public office", "公職に就く", "こうしょくにつく", "to take public office"),
-        ]
+    from add_words import NEW_WORDS
+    seed_data = [
+        ("職", "しょく", "job, work, occupation, duty / role", None, None, None),
+        ("職業", "しょくぎょう", "occupation / profession", "職業を選ぶ", "しょくぎょうをえらぶ", "to choose an occupation"),
+        ("無職", "むしょく", "unemployed", "無職の状態", "むしょくのじょうたい", "state of being unemployed"),
+        ("職場", "しょくば", "workplace", "職場の仲間", "しょくばのなかま", "workplace colleagues"),
+        ("退職", "たいしょく", "resignation (leaving a job)", "退職を決める", "たいしょくをきめる", "to decide to resign"),
+        ("就職", "しゅうしょく", "getting a job", "就職活動", "しゅうしょくかつどう", "job hunting"),
+        ("職務", "しょくむ", "job duties", "職務を果たす", "しょくむをはたす", "to fulfill one's duties"),
+        ("公職", "こうしょく", "public office", "公職に就く", "こうしょくにつく", "to take public office"),
+    ]
+    all_seed = seed_data + list(NEW_WORDS)
+    existing = {r[0] for r in conn.execute("SELECT kanji FROM cards")}
+    to_insert = [w for w in all_seed if w[0] not in existing]
+    if to_insert:
         conn.executemany(
             "INSERT INTO cards (kanji, reading, meaning, example_word, example_reading, example_meaning) VALUES (?,?,?,?,?,?)",
-            seed_data,
-        )
-        conn.executemany(
-            "INSERT INTO cards (kanji, reading, meaning, example_word, example_reading, example_meaning) VALUES (?,?,?,?,?,?)",
-            NEW_WORDS,
+            to_insert,
         )
         conn.commit()
     conn.close()
