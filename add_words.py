@@ -348,6 +348,22 @@ NEW_WORDS = [
     ("速い", "はやい", "fast / speedy (used for speed: running, cars, internet)", None, None, None),
     ("早い", "はやい", "early / soon (used for time: morning, arrival)", None, None, None),
     ("盗みます", "ぬすみます", "to steal", None, None, None),
+    ("沸きます", "わきます", "water boils", None, None, None),
+    ("遠い", "とおい", "far / distant", None, None, None),
+    ("遠く", "とおく", "far away", None, None, None),
+    ("近い", "ちかい", "near", None, None, None),
+    ("増える", "ふえる", "to increase (intransitive)", None, None, None),
+    ("減る", "へる", "to decrease (intransitive)", None, None, None),
+    ("増やす", "ふやす", "to increase something (transitive)", None, None, None),
+    ("減らす", "へらす", "to decrease something (transitive)", None, None, None),
+    ("増やします", "ふやします", "to increase something (transitive, polite)", None, None, None),
+    ("減らします", "へらします", "to decrease something (transitive, polite)", None, None, None),
+    ("増えます", "ふえます", "something increases (intransitive, polite)", None, None, None),
+    ("減ります", "へります", "something decreases (intransitive, polite)", None, None, None),
+    ("上げます", "あげます", "to raise / increase something", None, None, None),
+    ("下げます", "さげます", "to lower / reduce something", None, None, None),
+    ("上がります", "あがります", "something rises / goes up", None, None, None),
+    ("下がります", "さがります", "something falls / goes down", None, None, None),
 ]
 
 
