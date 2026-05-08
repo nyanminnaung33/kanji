@@ -26,15 +26,12 @@ def init_jlpt_table():
             meaning TEXT NOT NULL
         )
     """)
+    conn.execute("DELETE FROM jlpt_cards")
+    conn.executemany(
+        "INSERT INTO jlpt_cards (word, reading, meaning) VALUES (?,?,?)",
+        JLPT_WORDS,
+    )
     conn.commit()
-    existing = {(r[0], r[1]) for r in conn.execute("SELECT word, reading FROM jlpt_cards")}
-    to_insert = [(w, r, m) for w, r, m in JLPT_WORDS if (w, r) not in existing]
-    if to_insert:
-        conn.executemany(
-            "INSERT INTO jlpt_cards (word, reading, meaning) VALUES (?,?,?)",
-            to_insert,
-        )
-        conn.commit()
     conn.close()
 
 
@@ -65,14 +62,12 @@ def init_db():
         ("公職", "こうしょく", "public office", "公職に就く", "こうしょくにつく", "to take public office"),
     ]
     all_seed = seed_data + list(NEW_WORDS)
-    existing = {r[0] for r in conn.execute("SELECT kanji FROM cards")}
-    to_insert = [w for w in all_seed if w[0] not in existing]
-    if to_insert:
-        conn.executemany(
-            "INSERT INTO cards (kanji, reading, meaning, example_word, example_reading, example_meaning) VALUES (?,?,?,?,?,?)",
-            to_insert,
-        )
-        conn.commit()
+    conn.execute("DELETE FROM cards")
+    conn.executemany(
+        "INSERT INTO cards (kanji, reading, meaning, example_word, example_reading, example_meaning) VALUES (?,?,?,?,?,?)",
+        all_seed,
+    )
+    conn.commit()
     conn.close()
 
 
