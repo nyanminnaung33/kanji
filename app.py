@@ -153,7 +153,19 @@ def get_jlpt():
     if q:
         like = f"%{q}%"
         rows = conn.execute(
-            "SELECT * FROM jlpt_cards WHERE word LIKE ? OR reading LIKE ? OR meaning LIKE ? ORDER BY id",
+            """
+            SELECT * FROM jlpt_cards
+            WHERE word LIKE ?
+               OR reading LIKE ?
+               OR (
+                    CASE
+                      WHEN instr(meaning, char(10) || 'Example:') > 0
+                        THEN substr(meaning, 1, instr(meaning, char(10) || 'Example:') - 1)
+                      ELSE meaning
+                    END
+                  ) LIKE ?
+            ORDER BY id
+            """,
             (like, like, like),
         ).fetchall()
     else:
