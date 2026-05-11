@@ -236,6 +236,36 @@ def init_favourites():
     conn.close()
 
 
+def reconcile_favourites():
+    """After reseeding, fix card_id references in favourites using word+reading as the stable key."""
+    conn = get_db()
+    favs = conn.execute("SELECT * FROM favourites").fetchall()
+    for fav in [dict(r) for r in favs]:
+        if fav["card_type"] == "jlpt":
+            row = conn.execute(
+                "SELECT id FROM jlpt_cards WHERE word=? AND reading=?",
+                (fav["word"], fav["reading"]),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT id FROM cards WHERE kanji=? AND reading=?",
+                (fav["word"], fav["reading"]),
+            ).fetchone()
+
+        if row is None:
+            conn.execute("DELETE FROM favourites WHERE id=?", (fav["id"],))
+        elif row["id"] != fav["card_id"]:
+            try:
+                conn.execute(
+                    "UPDATE favourites SET card_id=? WHERE id=?",
+                    (row["id"], fav["id"]),
+                )
+            except Exception:
+                conn.execute("DELETE FROM favourites WHERE id=?", (fav["id"],))
+    conn.commit()
+    conn.close()
+
+
 @app.route("/api/favourites", methods=["GET"])
 def get_favourites():
     conn = get_db()
@@ -277,6 +307,7 @@ def remove_favourite(card_type, card_id):
 init_db()
 init_jlpt_table()
 init_favourites()
+reconcile_favourites()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
