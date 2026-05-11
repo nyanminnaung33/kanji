@@ -219,8 +219,64 @@ def delete_jlpt_card(card_id):
     return jsonify({"message": "Deleted"})
 
 
+def init_favourites():
+    conn = get_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS favourites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            card_type TEXT NOT NULL,
+            card_id INTEGER NOT NULL,
+            word TEXT NOT NULL,
+            reading TEXT NOT NULL,
+            meaning TEXT NOT NULL,
+            UNIQUE(card_type, card_id)
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+@app.route("/api/favourites", methods=["GET"])
+def get_favourites():
+    conn = get_db()
+    rows = conn.execute("SELECT * FROM favourites ORDER BY id").fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route("/api/favourites", methods=["POST"])
+def add_favourite():
+    data = request.get_json()
+    required = ["card_type", "card_id", "word", "reading", "meaning"]
+    if not all(k in data for k in required):
+        return jsonify({"error": "Missing fields"}), 400
+    conn = get_db()
+    try:
+        cur = conn.execute(
+            "INSERT INTO favourites (card_type, card_id, word, reading, meaning) VALUES (?,?,?,?,?)",
+            (data["card_type"], data["card_id"], data["word"], data["reading"], data["meaning"]),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM favourites WHERE id = ?", (cur.lastrowid,)).fetchone()
+        conn.close()
+        return jsonify(dict(row)), 201
+    except Exception:
+        conn.close()
+        return jsonify({"error": "Already favourited"}), 409
+
+
+@app.route("/api/favourites/<string:card_type>/<int:card_id>", methods=["DELETE"])
+def remove_favourite(card_type, card_id):
+    conn = get_db()
+    conn.execute("DELETE FROM favourites WHERE card_type=? AND card_id=?", (card_type, card_id))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Removed"})
+
+
 init_db()
 init_jlpt_table()
+init_favourites()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
