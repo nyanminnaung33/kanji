@@ -1,45 +1,102 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import sqlite3
 import os
 
 app = Flask(__name__)
 CORS(app)
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "kanji.db")
+DATABASE_URL = os.environ.get("DATABASE_URL")
+USE_PG = bool(DATABASE_URL)
+
+if USE_PG:
+    import psycopg2
+    import psycopg2.extras
+    _PK = "id SERIAL PRIMARY KEY"
+    _STRIP_EXAMPLE_SQL = """
+        CASE
+          WHEN strpos(meaning, chr(10) || 'Example:') > 0
+            THEN substr(meaning, 1, strpos(meaning, chr(10) || 'Example:') - 1)
+          ELSE meaning
+        END"""
+else:
+    import sqlite3
+    DB_PATH = os.environ.get("DB_PATH", os.path.join(os.path.dirname(__file__), "kanji.db"))
+    _PK = "id INTEGER PRIMARY KEY AUTOINCREMENT"
+    _STRIP_EXAMPLE_SQL = """
+        CASE
+          WHEN instr(meaning, char(10) || 'Example:') > 0
+            THEN substr(meaning, 1, instr(meaning, char(10) || 'Example:') - 1)
+          ELSE meaning
+        END"""
 
 
 def get_db():
+    if USE_PG:
+        return psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
+def _p(sql):
+    return sql.replace("?", "%s") if USE_PG else sql
+
+
+def run(conn, sql, params=()):
+    if USE_PG:
+        cur = conn.cursor()
+        cur.execute(_p(sql), params or None)
+        return cur
+    return conn.execute(sql, params)
+
+
+def runmany(conn, sql, params_list):
+    if USE_PG:
+        cur = conn.cursor()
+        cur.executemany(_p(sql), params_list)
+        return cur
+    return conn.executemany(sql, params_list)
+
+
+def getall(conn, sql, params=()):
+    return [dict(r) for r in run(conn, sql, params).fetchall()]
+
+
+def getone(conn, sql, params=()):
+    r = run(conn, sql, params).fetchone()
+    return dict(r) if r else None
+
+
+def insert_id(conn, sql, params):
+    if USE_PG:
+        cur = conn.cursor()
+        cur.execute(_p(sql) + " RETURNING id", params)
+        return cur.fetchone()["id"]
+    return conn.execute(sql, params).lastrowid
+
+
 def init_jlpt_table():
     from jlpt_seed import JLPT_WORDS
     conn = get_db()
-    conn.execute("""
+    run(conn, f"""
         CREATE TABLE IF NOT EXISTS jlpt_cards (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            {_PK},
             word TEXT NOT NULL,
             reading TEXT NOT NULL,
             meaning TEXT NOT NULL
         )
     """)
-    conn.execute("DELETE FROM jlpt_cards")
-    conn.executemany(
-        "INSERT INTO jlpt_cards (word, reading, meaning) VALUES (?,?,?)",
-        JLPT_WORDS,
-    )
+    run(conn, "DELETE FROM jlpt_cards")
+    runmany(conn, "INSERT INTO jlpt_cards (word, reading, meaning) VALUES (?,?,?)", JLPT_WORDS)
     conn.commit()
     conn.close()
 
 
 def init_db():
     conn = get_db()
-    conn.execute("""
+    run(conn, f"""
         CREATE TABLE IF NOT EXISTS cards (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            {_PK},
             kanji TEXT NOT NULL,
             reading TEXT NOT NULL,
             meaning TEXT NOT NULL,
@@ -62,8 +119,9 @@ def init_db():
         ("公職", "こうしょく", "public office", "公職に就く", "こうしょくにつく", "to take public office"),
     ]
     all_seed = seed_data + list(NEW_WORDS)
-    conn.execute("DELETE FROM cards")
-    conn.executemany(
+    run(conn, "DELETE FROM cards")
+    runmany(
+        conn,
         "INSERT INTO cards (kanji, reading, meaning, example_word, example_reading, example_meaning) VALUES (?,?,?,?,?,?)",
         all_seed,
     )
@@ -74,19 +132,19 @@ def init_db():
 @app.route("/api/cards", methods=["GET"])
 def get_cards():
     conn = get_db()
-    rows = conn.execute("SELECT * FROM cards ORDER BY id").fetchall()
+    result = getall(conn, "SELECT * FROM cards ORDER BY id")
     conn.close()
-    return jsonify([dict(r) for r in rows])
+    return jsonify(result)
 
 
 @app.route("/api/cards/<int:card_id>", methods=["GET"])
 def get_card(card_id):
     conn = get_db()
-    row = conn.execute("SELECT * FROM cards WHERE id = ?", (card_id,)).fetchone()
+    card = getone(conn, "SELECT * FROM cards WHERE id = ?", (card_id,))
     conn.close()
-    if row is None:
+    if card is None:
         return jsonify({"error": "Card not found"}), 404
-    return jsonify(dict(row))
+    return jsonify(card)
 
 
 @app.route("/api/cards", methods=["POST"])
@@ -96,28 +154,27 @@ def create_card():
     if not all(k in data for k in required):
         return jsonify({"error": "kanji, reading, and meaning are required"}), 400
     conn = get_db()
-    cur = conn.execute(
+    new_id = insert_id(
+        conn,
         "INSERT INTO cards (kanji, reading, meaning, example_word, example_reading, example_meaning) VALUES (?,?,?,?,?,?)",
         (data["kanji"], data["reading"], data["meaning"],
          data.get("example_word"), data.get("example_reading"), data.get("example_meaning")),
     )
     conn.commit()
-    new_id = cur.lastrowid
-    row = conn.execute("SELECT * FROM cards WHERE id = ?", (new_id,)).fetchone()
+    card = getone(conn, "SELECT * FROM cards WHERE id = ?", (new_id,))
     conn.close()
-    return jsonify(dict(row)), 201
+    return jsonify(card), 201
 
 
 @app.route("/api/cards/<int:card_id>", methods=["PUT"])
 def update_card(card_id):
     data = request.get_json()
     conn = get_db()
-    row = conn.execute("SELECT * FROM cards WHERE id = ?", (card_id,)).fetchone()
-    if row is None:
+    card = getone(conn, "SELECT * FROM cards WHERE id = ?", (card_id,))
+    if card is None:
         conn.close()
         return jsonify({"error": "Card not found"}), 404
-    card = dict(row)
-    conn.execute(
+    run(conn,
         "UPDATE cards SET kanji=?, reading=?, meaning=?, example_word=?, example_reading=?, example_meaning=? WHERE id=?",
         (data.get("kanji", card["kanji"]),
          data.get("reading", card["reading"]),
@@ -128,19 +185,19 @@ def update_card(card_id):
          card_id),
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM cards WHERE id = ?", (card_id,)).fetchone()
+    card = getone(conn, "SELECT * FROM cards WHERE id = ?", (card_id,))
     conn.close()
-    return jsonify(dict(row))
+    return jsonify(card)
 
 
 @app.route("/api/cards/<int:card_id>", methods=["DELETE"])
 def delete_card(card_id):
     conn = get_db()
-    row = conn.execute("SELECT * FROM cards WHERE id = ?", (card_id,)).fetchone()
-    if row is None:
+    card = getone(conn, "SELECT * FROM cards WHERE id = ?", (card_id,))
+    if card is None:
         conn.close()
         return jsonify({"error": "Card not found"}), 404
-    conn.execute("DELETE FROM cards WHERE id = ?", (card_id,))
+    run(conn, "DELETE FROM cards WHERE id = ?", (card_id,))
     conn.commit()
     conn.close()
     return jsonify({"message": "Card deleted"})
@@ -152,48 +209,38 @@ def get_jlpt():
     conn = get_db()
     if q:
         like = f"%{q}%"
-        rows = conn.execute(
-            """
+        result = getall(conn, f"""
             SELECT * FROM jlpt_cards
             WHERE word LIKE ?
                OR reading LIKE ?
-               OR (
-                    CASE
-                      WHEN instr(meaning, char(10) || 'Example:') > 0
-                        THEN substr(meaning, 1, instr(meaning, char(10) || 'Example:') - 1)
-                      ELSE meaning
-                    END
-                  ) LIKE ?
+               OR ({_STRIP_EXAMPLE_SQL}) LIKE ?
             ORDER BY id
-            """,
-            (like, like, like),
-        ).fetchall()
+            """, (like, like, like))
     else:
-        rows = conn.execute("SELECT * FROM jlpt_cards ORDER BY id").fetchall()
+        result = getall(conn, "SELECT * FROM jlpt_cards ORDER BY id")
     conn.close()
-    return jsonify([dict(r) for r in rows])
+    return jsonify(result)
 
 
 @app.route("/api/jlpt/<int:card_id>", methods=["GET"])
 def get_jlpt_card(card_id):
     conn = get_db()
-    row = conn.execute("SELECT * FROM jlpt_cards WHERE id = ?", (card_id,)).fetchone()
+    card = getone(conn, "SELECT * FROM jlpt_cards WHERE id = ?", (card_id,))
     conn.close()
-    if row is None:
+    if card is None:
         return jsonify({"error": "Not found"}), 404
-    return jsonify(dict(row))
+    return jsonify(card)
 
 
 @app.route("/api/jlpt/<int:card_id>", methods=["PUT"])
 def update_jlpt_card(card_id):
     data = request.get_json()
     conn = get_db()
-    row = conn.execute("SELECT * FROM jlpt_cards WHERE id = ?", (card_id,)).fetchone()
-    if row is None:
+    card = getone(conn, "SELECT * FROM jlpt_cards WHERE id = ?", (card_id,))
+    if card is None:
         conn.close()
         return jsonify({"error": "Not found"}), 404
-    card = dict(row)
-    conn.execute(
+    run(conn,
         "UPDATE jlpt_cards SET word=?, reading=?, meaning=? WHERE id=?",
         (data.get("word", card["word"]),
          data.get("reading", card["reading"]),
@@ -201,19 +248,19 @@ def update_jlpt_card(card_id):
          card_id),
     )
     conn.commit()
-    row = conn.execute("SELECT * FROM jlpt_cards WHERE id = ?", (card_id,)).fetchone()
+    card = getone(conn, "SELECT * FROM jlpt_cards WHERE id = ?", (card_id,))
     conn.close()
-    return jsonify(dict(row))
+    return jsonify(card)
 
 
 @app.route("/api/jlpt/<int:card_id>", methods=["DELETE"])
 def delete_jlpt_card(card_id):
     conn = get_db()
-    row = conn.execute("SELECT * FROM jlpt_cards WHERE id = ?", (card_id,)).fetchone()
-    if row is None:
+    card = getone(conn, "SELECT * FROM jlpt_cards WHERE id = ?", (card_id,))
+    if card is None:
         conn.close()
         return jsonify({"error": "Not found"}), 404
-    conn.execute("DELETE FROM jlpt_cards WHERE id = ?", (card_id,))
+    run(conn, "DELETE FROM jlpt_cards WHERE id = ?", (card_id,))
     conn.commit()
     conn.close()
     return jsonify({"message": "Deleted"})
@@ -221,9 +268,9 @@ def delete_jlpt_card(card_id):
 
 def init_favourites():
     conn = get_db()
-    conn.execute("""
+    run(conn, f"""
         CREATE TABLE IF NOT EXISTS favourites (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            {_PK},
             card_type TEXT NOT NULL,
             card_id INTEGER NOT NULL,
             word TEXT NOT NULL,
@@ -237,31 +284,26 @@ def init_favourites():
 
 
 def reconcile_favourites():
-    """After reseeding, fix card_id references in favourites using word+reading as the stable key."""
+    """After reseeding, fix card_id references using word+reading as the stable key."""
     conn = get_db()
-    favs = conn.execute("SELECT * FROM favourites").fetchall()
-    for fav in [dict(r) for r in favs]:
+    favs = getall(conn, "SELECT * FROM favourites")
+    for fav in favs:
         if fav["card_type"] == "jlpt":
-            row = conn.execute(
-                "SELECT id FROM jlpt_cards WHERE word=? AND reading=?",
-                (fav["word"], fav["reading"]),
-            ).fetchone()
+            current = getone(conn, "SELECT id FROM jlpt_cards WHERE word=? AND reading=?",
+                             (fav["word"], fav["reading"]))
         else:
-            row = conn.execute(
-                "SELECT id FROM cards WHERE kanji=? AND reading=?",
-                (fav["word"], fav["reading"]),
-            ).fetchone()
+            current = getone(conn, "SELECT id FROM cards WHERE kanji=? AND reading=?",
+                             (fav["word"], fav["reading"]))
 
-        if row is None:
-            conn.execute("DELETE FROM favourites WHERE id=?", (fav["id"],))
-        elif row["id"] != fav["card_id"]:
+        if current is None:
+            run(conn, "DELETE FROM favourites WHERE id=?", (fav["id"],))
+        elif current["id"] != fav["card_id"]:
             try:
-                conn.execute(
-                    "UPDATE favourites SET card_id=? WHERE id=?",
-                    (row["id"], fav["id"]),
-                )
+                run(conn, "UPDATE favourites SET card_id=? WHERE id=?", (current["id"], fav["id"]))
             except Exception:
-                conn.execute("DELETE FROM favourites WHERE id=?", (fav["id"],))
+                if USE_PG:
+                    conn.rollback()
+                run(conn, "DELETE FROM favourites WHERE id=?", (fav["id"],))
     conn.commit()
     conn.close()
 
@@ -269,9 +311,9 @@ def reconcile_favourites():
 @app.route("/api/favourites", methods=["GET"])
 def get_favourites():
     conn = get_db()
-    rows = conn.execute("SELECT * FROM favourites ORDER BY id").fetchall()
+    result = getall(conn, "SELECT * FROM favourites ORDER BY id")
     conn.close()
-    return jsonify([dict(r) for r in rows])
+    return jsonify(result)
 
 
 @app.route("/api/favourites", methods=["POST"])
@@ -282,14 +324,15 @@ def add_favourite():
         return jsonify({"error": "Missing fields"}), 400
     conn = get_db()
     try:
-        cur = conn.execute(
+        new_id = insert_id(
+            conn,
             "INSERT INTO favourites (card_type, card_id, word, reading, meaning) VALUES (?,?,?,?,?)",
             (data["card_type"], data["card_id"], data["word"], data["reading"], data["meaning"]),
         )
         conn.commit()
-        row = conn.execute("SELECT * FROM favourites WHERE id = ?", (cur.lastrowid,)).fetchone()
+        fav = getone(conn, "SELECT * FROM favourites WHERE id = ?", (new_id,))
         conn.close()
-        return jsonify(dict(row)), 201
+        return jsonify(fav), 201
     except Exception:
         conn.close()
         return jsonify({"error": "Already favourited"}), 409
@@ -298,7 +341,7 @@ def add_favourite():
 @app.route("/api/favourites/<string:card_type>/<int:card_id>", methods=["DELETE"])
 def remove_favourite(card_type, card_id):
     conn = get_db()
-    conn.execute("DELETE FROM favourites WHERE card_type=? AND card_id=?", (card_type, card_id))
+    run(conn, "DELETE FROM favourites WHERE card_type=? AND card_id=?", (card_type, card_id))
     conn.commit()
     conn.close()
     return jsonify({"message": "Removed"})
