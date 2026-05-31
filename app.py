@@ -291,6 +291,15 @@ def reconcile_favourites():
         if fav["card_type"] == "jlpt":
             current = getone(conn, "SELECT id FROM jlpt_cards WHERE word=? AND reading=?",
                              (fav["word"], fav["reading"]))
+        elif fav["card_type"] == "n3":
+            current = getone(conn, "SELECT id FROM n3_cards WHERE word=? AND reading=?",
+                             (fav["word"], fav["reading"]))
+        elif fav["card_type"] == "n4":
+            current = getone(conn, "SELECT id FROM n4_cards WHERE word=? AND reading=?",
+                             (fav["word"], fav["reading"]))
+        elif fav["card_type"] == "marugoto":
+            current = getone(conn, "SELECT id FROM marugoto_cards WHERE word=? AND reading=?",
+                             (fav["word"], fav["reading"]))
         else:
             current = getone(conn, "SELECT id FROM cards WHERE kanji=? AND reading=?",
                              (fav["word"], fav["reading"]))
@@ -347,9 +356,317 @@ def remove_favourite(card_type, card_id):
     return jsonify({"message": "Removed"})
 
 
+def init_passages():
+    from passages import PASSAGES
+    conn = get_db()
+    run(conn, "DROP TABLE IF EXISTS passages")
+    run(conn, f"""
+        CREATE TABLE passages (
+            {_PK},
+            title TEXT NOT NULL,
+            level TEXT NOT NULL,
+            text TEXT NOT NULL,
+            translation TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    runmany(
+        conn,
+        "INSERT INTO passages (title, level, text, translation) VALUES (?,?,?,?)",
+        [(p["title"], p["level"], p["text"], p.get("translation", "")) for p in PASSAGES],
+    )
+    conn.commit()
+    conn.close()
+
+
+@app.route("/api/passages", methods=["GET"])
+def get_passages():
+    conn = get_db()
+    result = getall(
+        conn,
+        "SELECT id, title, level, substr(text, 1, 60) AS preview FROM passages ORDER BY id",
+    )
+    conn.close()
+    return jsonify(result)
+
+
+@app.route("/api/passages/<int:passage_id>", methods=["GET"])
+def get_passage(passage_id):
+    from passages import PASSAGES
+    conn = get_db()
+    passage = getone(conn, "SELECT * FROM passages WHERE id = ?", (passage_id,))
+    if passage is None:
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+
+    text = passage["text"]
+    cards = getall(conn, "SELECT kanji AS word, reading, meaning FROM cards")
+    jlpt = getall(conn, "SELECT word, reading, meaning FROM jlpt_cards")
+    conn.close()
+
+    seen = set()
+    words = []
+    for w in cards + jlpt:
+        word = w["word"]
+        if word and word in text and word not in seen:
+            seen.add(word)
+            words.append({"word": word, "reading": w["reading"], "meaning": w["meaning"]})
+
+    vocab_raw = PASSAGES[passage_id - 1].get("vocab", []) if passage_id <= len(PASSAGES) else []
+    vocab = [{"word": v[0], "hiragana": v[1], "breakdown": v[2], "meaning": v[3]} for v in vocab_raw]
+
+    return jsonify({**passage, "words": words, "vocab": vocab})
+
+
+def init_n3_table():
+    from n3_seed import N3_WORDS
+    conn = get_db()
+    run(conn, f"""
+        CREATE TABLE IF NOT EXISTS n3_cards (
+            {_PK},
+            word TEXT NOT NULL,
+            reading TEXT NOT NULL,
+            meaning TEXT NOT NULL,
+            myanmar_meaning TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    run(conn, "DELETE FROM n3_cards")
+    runmany(conn, "INSERT INTO n3_cards (word, reading, meaning, myanmar_meaning) VALUES (?,?,?,?)", N3_WORDS)
+    conn.commit()
+    conn.close()
+
+
+@app.route("/api/n3", methods=["GET"])
+def get_n3():
+    q = request.args.get("q", "").strip()
+    conn = get_db()
+    if q:
+        like = f"%{q}%"
+        result = getall(conn, """
+            SELECT * FROM n3_cards
+            WHERE word LIKE ?
+               OR reading LIKE ?
+               OR meaning LIKE ?
+               OR myanmar_meaning LIKE ?
+            ORDER BY id
+        """, (like, like, like, like))
+    else:
+        result = getall(conn, "SELECT * FROM n3_cards ORDER BY id")
+    conn.close()
+    return jsonify(result)
+
+
+@app.route("/api/n3/<int:card_id>", methods=["GET"])
+def get_n3_card(card_id):
+    conn = get_db()
+    card = getone(conn, "SELECT * FROM n3_cards WHERE id = ?", (card_id,))
+    conn.close()
+    if card is None:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(card)
+
+
+@app.route("/api/n3/<int:card_id>", methods=["PUT"])
+def update_n3_card(card_id):
+    data = request.get_json()
+    conn = get_db()
+    card = getone(conn, "SELECT * FROM n3_cards WHERE id = ?", (card_id,))
+    if card is None:
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+    run(conn,
+        "UPDATE n3_cards SET word=?, reading=?, meaning=?, myanmar_meaning=? WHERE id=?",
+        (data.get("word", card["word"]),
+         data.get("reading", card["reading"]),
+         data.get("meaning", card["meaning"]),
+         data.get("myanmar_meaning", card["myanmar_meaning"]),
+         card_id),
+    )
+    conn.commit()
+    card = getone(conn, "SELECT * FROM n3_cards WHERE id = ?", (card_id,))
+    conn.close()
+    return jsonify(card)
+
+
+@app.route("/api/n3/<int:card_id>", methods=["DELETE"])
+def delete_n3_card(card_id):
+    conn = get_db()
+    card = getone(conn, "SELECT * FROM n3_cards WHERE id = ?", (card_id,))
+    if card is None:
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+    run(conn, "DELETE FROM n3_cards WHERE id = ?", (card_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Deleted"})
+
+
+def init_n4_table():
+    from n4_seed import N4_WORDS
+    conn = get_db()
+    run(conn, f"""
+        CREATE TABLE IF NOT EXISTS n4_cards (
+            {_PK},
+            word TEXT NOT NULL,
+            reading TEXT NOT NULL,
+            myanmar_meaning TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    run(conn, "DELETE FROM n4_cards")
+    runmany(conn, "INSERT INTO n4_cards (word, reading, myanmar_meaning) VALUES (?,?,?)", N4_WORDS)
+    conn.commit()
+    conn.close()
+
+
+@app.route("/api/n4", methods=["GET"])
+def get_n4():
+    q = request.args.get("q", "").strip()
+    conn = get_db()
+    if q:
+        like = f"%{q}%"
+        result = getall(conn, """
+            SELECT * FROM n4_cards
+            WHERE word LIKE ?
+               OR reading LIKE ?
+               OR myanmar_meaning LIKE ?
+            ORDER BY id
+        """, (like, like, like))
+    else:
+        result = getall(conn, "SELECT * FROM n4_cards ORDER BY id")
+    conn.close()
+    return jsonify(result)
+
+
+@app.route("/api/n4/<int:card_id>", methods=["GET"])
+def get_n4_card(card_id):
+    conn = get_db()
+    card = getone(conn, "SELECT * FROM n4_cards WHERE id = ?", (card_id,))
+    conn.close()
+    if card is None:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(card)
+
+
+@app.route("/api/n4/<int:card_id>", methods=["PUT"])
+def update_n4_card(card_id):
+    data = request.get_json()
+    conn = get_db()
+    card = getone(conn, "SELECT * FROM n4_cards WHERE id = ?", (card_id,))
+    if card is None:
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+    run(conn,
+        "UPDATE n4_cards SET word=?, reading=?, myanmar_meaning=? WHERE id=?",
+        (data.get("word", card["word"]),
+         data.get("reading", card["reading"]),
+         data.get("myanmar_meaning", card["myanmar_meaning"]),
+         card_id),
+    )
+    conn.commit()
+    card = getone(conn, "SELECT * FROM n4_cards WHERE id = ?", (card_id,))
+    conn.close()
+    return jsonify(card)
+
+
+@app.route("/api/n4/<int:card_id>", methods=["DELETE"])
+def delete_n4_card(card_id):
+    conn = get_db()
+    card = getone(conn, "SELECT * FROM n4_cards WHERE id = ?", (card_id,))
+    if card is None:
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+    run(conn, "DELETE FROM n4_cards WHERE id = ?", (card_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Deleted"})
+
+
+def init_marugoto_table():
+    from marugoto_seed import MARUGOTO_WORDS
+    conn = get_db()
+    run(conn, f"""
+        CREATE TABLE IF NOT EXISTS marugoto_cards (
+            {_PK},
+            word TEXT NOT NULL,
+            reading TEXT NOT NULL,
+            myanmar_meaning TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    run(conn, "DELETE FROM marugoto_cards")
+    runmany(conn, "INSERT INTO marugoto_cards (word, reading, myanmar_meaning) VALUES (?,?,?)", MARUGOTO_WORDS)
+    conn.commit()
+    conn.close()
+
+
+@app.route("/api/marugoto", methods=["GET"])
+def get_marugoto():
+    q = request.args.get("q", "").strip()
+    conn = get_db()
+    if q:
+        like = f"%{q}%"
+        result = getall(conn, """
+            SELECT * FROM marugoto_cards
+            WHERE word LIKE ?
+               OR reading LIKE ?
+               OR myanmar_meaning LIKE ?
+            ORDER BY id
+        """, (like, like, like))
+    else:
+        result = getall(conn, "SELECT * FROM marugoto_cards ORDER BY id")
+    conn.close()
+    return jsonify(result)
+
+
+@app.route("/api/marugoto/<int:card_id>", methods=["GET"])
+def get_marugoto_card(card_id):
+    conn = get_db()
+    card = getone(conn, "SELECT * FROM marugoto_cards WHERE id = ?", (card_id,))
+    conn.close()
+    if card is None:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(card)
+
+
+@app.route("/api/marugoto/<int:card_id>", methods=["PUT"])
+def update_marugoto_card(card_id):
+    data = request.get_json()
+    conn = get_db()
+    card = getone(conn, "SELECT * FROM marugoto_cards WHERE id = ?", (card_id,))
+    if card is None:
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+    run(conn,
+        "UPDATE marugoto_cards SET word=?, reading=?, myanmar_meaning=? WHERE id=?",
+        (data.get("word", card["word"]),
+         data.get("reading", card["reading"]),
+         data.get("myanmar_meaning", card["myanmar_meaning"]),
+         card_id),
+    )
+    conn.commit()
+    card = getone(conn, "SELECT * FROM marugoto_cards WHERE id = ?", (card_id,))
+    conn.close()
+    return jsonify(card)
+
+
+@app.route("/api/marugoto/<int:card_id>", methods=["DELETE"])
+def delete_marugoto_card(card_id):
+    conn = get_db()
+    card = getone(conn, "SELECT * FROM marugoto_cards WHERE id = ?", (card_id,))
+    if card is None:
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+    run(conn, "DELETE FROM marugoto_cards WHERE id = ?", (card_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Deleted"})
+
+
 init_db()
 init_jlpt_table()
+init_n3_table()
+init_n4_table()
+init_marugoto_table()
 init_favourites()
+init_passages()
 reconcile_favourites()
 
 if __name__ == "__main__":
