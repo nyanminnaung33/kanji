@@ -300,6 +300,9 @@ def reconcile_favourites():
         elif fav["card_type"] == "marugoto":
             current = getone(conn, "SELECT id FROM marugoto_cards WHERE word=? AND reading=?",
                              (fav["word"], fav["reading"]))
+        elif fav["card_type"] == "exam_key":
+            current = getone(conn, "SELECT id FROM exam_key_cards WHERE word=? AND reading=?",
+                             (fav["word"], fav["reading"]))
         else:
             current = getone(conn, "SELECT id FROM cards WHERE kanji=? AND reading=?",
                              (fav["word"], fav["reading"]))
@@ -660,11 +663,95 @@ def delete_marugoto_card(card_id):
     return jsonify({"message": "Deleted"})
 
 
+def init_exam_key_table():
+    from exam_key_seed import EXAM_KEY_WORDS
+    conn = get_db()
+    run(conn, f"""
+        CREATE TABLE IF NOT EXISTS exam_key_cards (
+            {_PK},
+            word TEXT NOT NULL,
+            reading TEXT NOT NULL,
+            myanmar_meaning TEXT NOT NULL DEFAULT '',
+            example TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    run(conn, "DELETE FROM exam_key_cards")
+    runmany(conn, "INSERT INTO exam_key_cards (word, reading, myanmar_meaning, example) VALUES (?,?,?,?)", EXAM_KEY_WORDS)
+    conn.commit()
+    conn.close()
+
+
+@app.route("/api/exam_key", methods=["GET"])
+def get_exam_key():
+    q = request.args.get("q", "").strip()
+    conn = get_db()
+    if q:
+        like = f"%{q}%"
+        result = getall(conn, """
+            SELECT * FROM exam_key_cards
+            WHERE word LIKE ?
+               OR reading LIKE ?
+               OR myanmar_meaning LIKE ?
+               OR example LIKE ?
+            ORDER BY id
+        """, (like, like, like, like))
+    else:
+        result = getall(conn, "SELECT * FROM exam_key_cards ORDER BY id")
+    conn.close()
+    return jsonify(result)
+
+
+@app.route("/api/exam_key/<int:card_id>", methods=["GET"])
+def get_exam_key_card(card_id):
+    conn = get_db()
+    card = getone(conn, "SELECT * FROM exam_key_cards WHERE id = ?", (card_id,))
+    conn.close()
+    if card is None:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify(card)
+
+
+@app.route("/api/exam_key/<int:card_id>", methods=["PUT"])
+def update_exam_key_card(card_id):
+    data = request.get_json()
+    conn = get_db()
+    card = getone(conn, "SELECT * FROM exam_key_cards WHERE id = ?", (card_id,))
+    if card is None:
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+    run(conn,
+        "UPDATE exam_key_cards SET word=?, reading=?, myanmar_meaning=?, example=? WHERE id=?",
+        (data.get("word", card["word"]),
+         data.get("reading", card["reading"]),
+         data.get("myanmar_meaning", card["myanmar_meaning"]),
+         data.get("example", card["example"]),
+         card_id),
+    )
+    conn.commit()
+    card = getone(conn, "SELECT * FROM exam_key_cards WHERE id = ?", (card_id,))
+    conn.close()
+    return jsonify(card)
+
+
+@app.route("/api/exam_key/<int:card_id>", methods=["DELETE"])
+def delete_exam_key_card(card_id):
+    conn = get_db()
+    card = getone(conn, "SELECT * FROM exam_key_cards WHERE id = ?", (card_id,))
+    if card is None:
+        conn.close()
+        return jsonify({"error": "Not found"}), 404
+    run(conn, "DELETE FROM exam_key_cards WHERE id = ?", (card_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Deleted"})
+
+
 init_db()
 init_jlpt_table()
 init_n3_table()
 init_n4_table()
 init_marugoto_table()
+init_exam_key_table()
 init_favourites()
 init_passages()
 reconcile_favourites()
